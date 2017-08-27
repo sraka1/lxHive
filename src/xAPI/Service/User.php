@@ -27,8 +27,10 @@ namespace API\Service;
 use API\Service;
 use API\Resource;
 use API\Util\OAuth;
+use API\Util\Rememberme\MongoStorage as RemembermeMongoStorage;
 use Slim\Helper\Set;
 use Sokil\Mongo\Cursor;
+use Birke\Rememberme;
 
 class User extends Service
 {
@@ -107,21 +109,85 @@ class User extends Service
         $this->single = true;
         $this->users = [$document];
 
-        //Set the session
+        // Set the session
         $_SESSION['userId'] = $document->getId();
         $_SESSION['expiresAt'] = time() + 3600; //1 hour
+
+        // Set the Remember me cookie
+        $rememberMeStorage = new RemembermeMongoStorage($this->getDocumentManager());
+        $rememberMe = new Rememberme\Authenticator($rememberMeStorage);
+
+
+        if ($params->has('rememberMe')) {
+            $rememberMe->createCookie($document->getId());
+        } else {
+            $rememberMe->clearCookie();
+        }
 
         return $document;
     }
 
     public function loggedIn()
     {
+        $rememberMeStorage = new RemembermeMongoStorage($this->getDocumentManager());
+        $rememberMe = new Rememberme\Authenticator($rememberMeStorage);
+
         if (isset($_SESSION['userId']) && isset($_SESSION['expiresAt']) && $_SESSION['expiresAt'] > time()) {
             $_SESSION['expiresAt'] = time() + 3600; //Renew session on every activity
             return true;
+        } elseif (!empty($_COOKIE[$rememberMe->getCookieName()]) && $rememberMe->cookieIsValid()) { // Remember me cookie
+            $loginresult = $rememberMe->login();
+            if ($loginresult) {
+                // Load user into session and return true
+                // Set the session
+                $_SESSION['userId'] = $loginresult;
+                $_SESSION['expiresAt'] = time() + 3600; //1 hour
+                $_SESSION['rememberedByCookie'] = true;
+            } else {
+                if ($rememberMe->loginTokenWasInvalid()) {
+                    throw new \Exception('Remember me cookie invalid!', Resource::STATUS_BAD_REQUEST);
+                }
+            }
         } else {
             return false;
         }
+    }
+
+    public function findById($id)
+    {
+        $collection = $this->getDocumentManager()->getCollection('users');
+
+        $result = $collection->getDocument($id);
+
+        return $result;
+    }
+
+    public function findByEmail($email)
+    {
+        $collection = $this->getDocumentManager()->getCollection('users');
+        $cursor     = $collection->find();
+        $cursor->where('email', $email);
+
+        return $cursor;
+    }
+
+    public function getEmailCount($email)
+    {
+        $collection = $this->getDocumentManager()->getCollection('users');
+        $cursor     = $collection->find();
+        $cursor->where('email', $email);
+
+        $count = $cursor->count();
+
+        return $count;
+    }
+
+    public function getLoggedIn()
+    {
+        $userId = $_SESSION['userId'];
+        $userDocument = $this->findById($userId);
+
+        return $userDocument;
     }
 
     public function addUser($email, $password, $permissions)
@@ -160,12 +226,8 @@ class User extends Service
 
     public function fetchAvailablePermissions()
     {
-        $collection  = $this->getDocumentManager()->getCollection('authScopes');
-        $cursor      = $collection->find();
-
-        $this->cursor = $cursor;
-
-        return $this;
+        $service = new AuthScopes($this->getSlim());
+        return $service->fetchAll();
     }
 
     /**

@@ -30,6 +30,7 @@ use API\Resource;
 use API\Util;
 use Slim\Helper\Set;
 use Sokil\Mongo\Cursor;
+use Rhumsaa\Uuid\Uuid;
 
 class Statement extends Service
 {
@@ -110,11 +111,45 @@ class Statement extends Service
         $collection  = $this->getDocumentManager()->getCollection('statements');
         $cursor      = $collection->find();
 
+        // Check if the user only has statements/read/mine permission and nothing more
+        // In which case we restrict him severely
+        if (
+            $this->getAccessToken()->hasPermission('statements/read/mine') 
+            && !$this->getAccessToken()->hasPermission('statements/read') 
+            && !$this->getAccessToken()->hasPermission('all') 
+            && !$this->getAccessToken()->hasPermission('all/read')
+            && !$this->getAccessToken()->hasPermission('super')) {
+            
+            // Check exact match for authority
+            //$cursor->where('statement.authority', $this->getAccessToken()->generateAuthority());
+
+            // Check that token belongs to same user (but can be different token)
+            // Example - user has a basic and OAuth token
+            // He writes statements with one of them and reads them with the other one
+            // However, e-mail uniqueness must be ensured for this to work
+            $cursor->whereOr(
+                // OAuth token - NOTE: This might be statement.authority.1.member.mbox or 
+                // statement.authority.{}.member.mbox
+                //$collection->expression()->where('statement.authority.member.mbox', $this->getAccessToken()->user->getEmail()),
+                $collection->expression()->whereElemMatch('statement.authority.member', 
+                    $collection->expression()
+                        ->where('mbox', 'mailto:' . $this->getAccessToken()->user->getEmail())
+                ),
+                // Basic token
+                $collection->expression()->where('statement.authority.account.name', $this->getAccessToken()->user->getEmail())
+            );
+
+            
+        }
+
         // Single statement
         if ($params->has('statementId')) {
             $cursor->where('statement.id', $params->get('statementId'));
             $cursor->where('voided', false);
 
+            if(!Uuid::isValid($params->get('statementId'))){
+                throw new Exception('Not a valid uuid.', Resource::STATUS_NOT_FOUND);
+            }
             if ($cursor->count() === 0) {
                 throw new Exception('Statement does not exist.', Resource::STATUS_NOT_FOUND);
             }
@@ -157,104 +192,190 @@ class Statement extends Service
             }
             if ($params->has('related_agents') && $params->get('related_agents') === 'true') {
                 if ($uniqueIdentifier === 'account') {
-                    $cursor->whereOr(
-                        $collection->expression()->whereAnd(
-                            $collection->expression()->where('statement.actor.'.$uniqueIdentifier.'.homePage', $agent[$uniqueIdentifier]['homePage']),
-                            $collection->expression()->where('statement.actor.'.$uniqueIdentifier.'.name', $agent[$uniqueIdentifier]['name'])
-                        ),
-                        $collection->expression()->whereAnd(
-                            $collection->expression()->where('statement.object.'.$uniqueIdentifier.'.homePage', $agent[$uniqueIdentifier]['homePage']),
-                            $collection->expression()->where('statement.object.'.$uniqueIdentifier.'.name', $agent[$uniqueIdentifier]['name'])
-                        ),
-                        $collection->expression()->whereAnd(
-                            $collection->expression()->where('statement.authority.'.$uniqueIdentifier.'.homePage', $agent[$uniqueIdentifier]['homePage']),
-                            $collection->expression()->where('statement.authority.'.$uniqueIdentifier.'.name', $agent[$uniqueIdentifier]['name'])
-                        ),
-                        $collection->expression()->whereAnd(
-                            $collection->expression()->where('statement.context.team.'.$uniqueIdentifier.'.homePage', $agent[$uniqueIdentifier]['homePage']),
-                            $collection->expression()->where('statement.context.team.'.$uniqueIdentifier.'.name', $agent[$uniqueIdentifier]['name'])
-                        ),
-                        $collection->expression()->whereAnd(
-                            $collection->expression()->where('statement.context.instructor.'.$uniqueIdentifier.'.homePage', $agent[$uniqueIdentifier]['homePage']),
-                            $collection->expression()->where('statement.context.instructor.'.$uniqueIdentifier.'.name', $agent[$uniqueIdentifier]['name'])
-                        ),
-                        $collection->expression()->whereAnd(
-                            $collection->expression()->where('statement.object.objectType', 'SubStatement'),
-                            $collection->expression()->where('statement.object.object.'.$uniqueIdentifier.'.homePage', $agent[$uniqueIdentifier]['homePage']),
-                            $collection->expression()->where('statement.object.object.'.$uniqueIdentifier.'.name', $agent[$uniqueIdentifier]['name'])
+                    $cursor->whereAnd(
+                        $collection->expression()->whereOr(
+                            $collection->expression()->whereAnd(
+                                $collection->expression()->where('statement.actor.'.$uniqueIdentifier.'.homePage', $agent[$uniqueIdentifier]['homePage']),
+                                $collection->expression()->where('statement.actor.'.$uniqueIdentifier.'.name', $agent[$uniqueIdentifier]['name'])
+                            ),
+                            $collection->expression()->whereAnd(
+                                $collection->expression()->where('statement.object.'.$uniqueIdentifier.'.homePage', $agent[$uniqueIdentifier]['homePage']),
+                                $collection->expression()->where('statement.object.'.$uniqueIdentifier.'.name', $agent[$uniqueIdentifier]['name'])
+                            ),
+                            $collection->expression()->whereAnd(
+                                $collection->expression()->where('statement.authority.'.$uniqueIdentifier.'.homePage', $agent[$uniqueIdentifier]['homePage']),
+                                $collection->expression()->where('statement.authority.'.$uniqueIdentifier.'.name', $agent[$uniqueIdentifier]['name'])
+                            ),
+                            $collection->expression()->whereAnd(
+                                $collection->expression()->where('statement.context.team.'.$uniqueIdentifier.'.homePage', $agent[$uniqueIdentifier]['homePage']),
+                                $collection->expression()->where('statement.context.team.'.$uniqueIdentifier.'.name', $agent[$uniqueIdentifier]['name'])
+                            ),
+                            $collection->expression()->whereAnd(
+                                $collection->expression()->where('statement.context.instructor.'.$uniqueIdentifier.'.homePage', $agent[$uniqueIdentifier]['homePage']),
+                                $collection->expression()->where('statement.context.instructor.'.$uniqueIdentifier.'.name', $agent[$uniqueIdentifier]['name'])
+                            ),
+                            $collection->expression()->whereAnd(
+                                $collection->expression()->where('statement.object.objectType', 'SubStatement'),
+                                $collection->expression()->where('statement.object.object.'.$uniqueIdentifier.'.homePage', $agent[$uniqueIdentifier]['homePage']),
+                                $collection->expression()->where('statement.object.object.'.$uniqueIdentifier.'.name', $agent[$uniqueIdentifier]['name'])
+                            ),
+                            $collection->expression()->whereAnd(
+                                $collection->expression()->where('references.actor.'.$uniqueIdentifier.'.homePage', $agent[$uniqueIdentifier]['homePage']),
+                                $collection->expression()->where('references.actor.'.$uniqueIdentifier.'.name', $agent[$uniqueIdentifier]['name'])
+                            ),
+                            $collection->expression()->whereAnd(
+                                $collection->expression()->where('references.object.'.$uniqueIdentifier.'.homePage', $agent[$uniqueIdentifier]['homePage']),
+                                $collection->expression()->where('references.object.'.$uniqueIdentifier.'.name', $agent[$uniqueIdentifier]['name'])
+                            ),
+                            $collection->expression()->whereAnd(
+                                $collection->expression()->where('references.authority.'.$uniqueIdentifier.'.homePage', $agent[$uniqueIdentifier]['homePage']),
+                                $collection->expression()->where('references.authority.'.$uniqueIdentifier.'.name', $agent[$uniqueIdentifier]['name'])
+                            ),
+                            $collection->expression()->whereAnd(
+                                $collection->expression()->where('references.context.team.'.$uniqueIdentifier.'.homePage', $agent[$uniqueIdentifier]['homePage']),
+                                $collection->expression()->where('references.context.team.'.$uniqueIdentifier.'.name', $agent[$uniqueIdentifier]['name'])
+                            ),
+                            $collection->expression()->whereAnd(
+                                $collection->expression()->where('references.context.instructor.'.$uniqueIdentifier.'.homePage', $agent[$uniqueIdentifier]['homePage']),
+                                $collection->expression()->where('references.context.instructor.'.$uniqueIdentifier.'.name', $agent[$uniqueIdentifier]['name'])
+                            ),
+                            $collection->expression()->whereAnd(
+                                $collection->expression()->where('references.object.objectType', 'SubStatement'),
+                                $collection->expression()->where('references.object.object.'.$uniqueIdentifier.'.homePage', $agent[$uniqueIdentifier]['homePage']),
+                                $collection->expression()->where('references.object.object.'.$uniqueIdentifier.'.name', $agent[$uniqueIdentifier]['name'])
+                            )
                         )
                     );
                 } else {
-                    $cursor->whereOr(
-                        $collection->expression()->where('statement.actor.'.$uniqueIdentifier, $agent[$uniqueIdentifier]),
-                        $collection->expression()->where('statement.object.'.$uniqueIdentifier, $agent[$uniqueIdentifier]),
-                        $collection->expression()->where('statement.authority.'.$uniqueIdentifier, $agent[$uniqueIdentifier]),
-                        $collection->expression()->where('statement.context.team.'.$uniqueIdentifier, $agent[$uniqueIdentifier]),
-                        $collection->expression()->where('statement.context.instructor.'.$uniqueIdentifier, $agent[$uniqueIdentifier]),
-                        $collection->expression()->whereAnd(
-                            $collection->expression()->where('statement.object.objectType', 'SubStatement'),
-                            $collection->expression()->where('statement.object.object.'.$uniqueIdentifier, $agent[$uniqueIdentifier])
+                    $cursor->whereAnd(
+                        $collection->expression()->whereOr(
+                            $collection->expression()->where('statement.actor.'.$uniqueIdentifier, $agent[$uniqueIdentifier]),
+                            $collection->expression()->where('statement.object.'.$uniqueIdentifier, $agent[$uniqueIdentifier]),
+                            $collection->expression()->where('statement.authority.'.$uniqueIdentifier, $agent[$uniqueIdentifier]),
+                            $collection->expression()->where('statement.context.team.'.$uniqueIdentifier, $agent[$uniqueIdentifier]),
+                            $collection->expression()->where('statement.context.instructor.'.$uniqueIdentifier, $agent[$uniqueIdentifier]),
+                            $collection->expression()->whereAnd(
+                                $collection->expression()->where('statement.object.objectType', 'SubStatement'),
+                                $collection->expression()->where('statement.object.object.'.$uniqueIdentifier, $agent[$uniqueIdentifier])
+                            ),
+                            $collection->expression()->where('references.actor.'.$uniqueIdentifier, $agent[$uniqueIdentifier]),
+                            $collection->expression()->where('references.object.'.$uniqueIdentifier, $agent[$uniqueIdentifier]),
+                            $collection->expression()->where('references.authority.'.$uniqueIdentifier, $agent[$uniqueIdentifier]),
+                            $collection->expression()->where('references.context.team.'.$uniqueIdentifier, $agent[$uniqueIdentifier]),
+                            $collection->expression()->where('references.context.instructor.'.$uniqueIdentifier, $agent[$uniqueIdentifier]),
+                            $collection->expression()->whereAnd(
+                                $collection->expression()->where('references.object.objectType', 'SubStatement'),
+                                $collection->expression()->where('references.object.object.'.$uniqueIdentifier, $agent[$uniqueIdentifier])
+                            )
                         )
                     );
                 }
             } else {
                 if ($uniqueIdentifier === 'account') {
-                    $cursor->whereOr(
-                        $collection->expression()->whereAnd(
-                            $collection->expression()->where('statement.actor.'.$uniqueIdentifier.'.homePage', $agent[$uniqueIdentifier]['homePage']),
-                            $collection->expression()->where('statement.actor.'.$uniqueIdentifier.'.name', $agent[$uniqueIdentifier]['name'])
-                        ),
-                        $collection->expression()->whereAnd(
-                            $collection->expression()->where('statement.object.'.$uniqueIdentifier.'.homePage', $agent[$uniqueIdentifier]['homePage']),
-                            $collection->expression()->where('statement.object.'.$uniqueIdentifier.'.name', $agent[$uniqueIdentifier]['name'])
+                    $cursor->whereAnd(
+                        $collection->expression()->whereOr(
+                            $collection->expression()->whereAnd(
+                                $collection->expression()->where('statement.actor.'.$uniqueIdentifier.'.homePage', $agent[$uniqueIdentifier]['homePage']),
+                                $collection->expression()->where('statement.actor.'.$uniqueIdentifier.'.name', $agent[$uniqueIdentifier]['name'])
+                            ),
+                            $collection->expression()->whereAnd(
+                                $collection->expression()->where('statement.object.'.$uniqueIdentifier.'.homePage', $agent[$uniqueIdentifier]['homePage']),
+                                $collection->expression()->where('statement.object.'.$uniqueIdentifier.'.name', $agent[$uniqueIdentifier]['name'])
+                            ),
+                            $collection->expression()->whereAnd(
+                                $collection->expression()->where('references.actor.'.$uniqueIdentifier.'.homePage', $agent[$uniqueIdentifier]['homePage']),
+                                $collection->expression()->where('references.actor.'.$uniqueIdentifier.'.name', $agent[$uniqueIdentifier]['name'])
+                            ),
+                            $collection->expression()->whereAnd(
+                                $collection->expression()->where('references.object.'.$uniqueIdentifier.'.homePage', $agent[$uniqueIdentifier]['homePage']),
+                                $collection->expression()->where('references.object.'.$uniqueIdentifier.'.name', $agent[$uniqueIdentifier]['name'])
+                            )
                         )
                     );
                 } else {
-                    $cursor->whereOr(
-                        $collection->expression()->where('statement.actor.'.$uniqueIdentifier, $agent[$uniqueIdentifier]),
-                        $collection->expression()->where('statement.object.'.$uniqueIdentifier, $agent[$uniqueIdentifier])
+                    $cursor->whereAnd(
+                        $collection->expression()->whereOr(
+                            $collection->expression()->where('statement.actor.'.$uniqueIdentifier, $agent[$uniqueIdentifier]),
+                            $collection->expression()->where('statement.object.'.$uniqueIdentifier, $agent[$uniqueIdentifier]),
+                            $collection->expression()->where('references.actor.'.$uniqueIdentifier, $agent[$uniqueIdentifier]),
+                            $collection->expression()->where('references.object.'.$uniqueIdentifier, $agent[$uniqueIdentifier])
+                        )
                     );
                 }
             }
         }
-
         if ($params->has('verb')) {
-            $cursor->where('statement.verb.id', $params->get('verb'));
+            $cursor->whereAnd(
+                $collection->expression()->whereOr(
+                    $collection->expression()->where('statement.verb.id', $params->get('verb')),
+                    $collection->expression()->where('references.verb.id', $params->get('verb'))
+                )
+            );
         }
-
-        // This could probably be optimized
         if ($params->has('activity')) {
             // Handle related
             if ($params->has('related_activities') && $params->get('related_activities') === 'true') {
-                $cursor->whereOr(
-                    $collection->expression()->where('statement.object.id', $params->get('activity')),
-                    $collection->expression()->where('statement.context.contextActivities.parent.id', $params->get('activity')),
-                    $collection->expression()->where('statement.context.contextActivities.category.id', $params->get('activity')),
-                    $collection->expression()->where('statement.context.contextActivities.grouping.id', $params->get('activity')),
-                    $collection->expression()->where('statement.context.contextActivities.other.id', $params->get('activity')),
-                    $collection->expression()->where('statement.context.contextActivities.parent.id', $params->get('activity')),
-                    $collection->expression()->where('statement.context.contextActivities.parent.id', $params->get('activity')),
-                    $collection->expression()->whereAnd(
-                        $collection->expression()->where('statement.object.objectType', 'SubStatement'),
-                        $collection->expression()->where('statement.object.object', $params->get('activity'))
+                $cursor->whereAnd(
+                    $collection->expression()->whereOr(
+                        $collection->expression()->where('statement.object.id', $params->get('activity')),
+                        $collection->expression()->where('statement.context.contextActivities.parent.id', $params->get('activity')),
+                        $collection->expression()->where('statement.context.contextActivities.category.id', $params->get('activity')),
+                        $collection->expression()->where('statement.context.contextActivities.grouping.id', $params->get('activity')),
+                        $collection->expression()->where('statement.context.contextActivities.other.id', $params->get('activity')),
+                        $collection->expression()->where('statement.context.contextActivities.parent.id', $params->get('activity')),
+                        $collection->expression()->where('statement.context.contextActivities.parent.id', $params->get('activity')),
+                        $collection->expression()->whereAnd(
+                            $collection->expression()->where('statement.object.objectType', 'SubStatement'),
+                            $collection->expression()->where('statement.object.object', $params->get('activity'))
+                        ),
+                        $collection->expression()->where('references.object.id', $params->get('activity')),
+                        $collection->expression()->where('references.context.contextActivities.parent.id', $params->get('activity')),
+                        $collection->expression()->where('references.context.contextActivities.category.id', $params->get('activity')),
+                        $collection->expression()->where('references.context.contextActivities.grouping.id', $params->get('activity')),
+                        $collection->expression()->where('references.context.contextActivities.other.id', $params->get('activity')),
+                        $collection->expression()->where('references.context.contextActivities.parent.id', $params->get('activity')),
+                        $collection->expression()->where('references.context.contextActivities.parent.id', $params->get('activity')),
+                        $collection->expression()->whereAnd(
+                            $collection->expression()->where('references.object.objectType', 'SubStatement'),
+                            $collection->expression()->where('references.object.object', $params->get('activity'))
+                        )
                     )
                 );
             } else {
-                $cursor->where('statement.object.id', $params->get('activity'));
+                $cursor->whereAnd(
+                    $collection->expression()->whereOr(
+                        $collection->expression()->where('statement.object.id', $params->get('activity')),
+                        $collection->expression()->where('references.object.id', $params->get('activity'))
+                    )
+                );
             }
         }
 
         if ($params->has('registration')) {
-            $cursor->where('statement.context.registration', $params->get('registration'));
+            $cursor->whereAnd(
+                $collection->expression()->whereOr(
+                    $collection->expression()->where('statement.context.registration', $params->get('registration')),
+                    $collection->expression()->where('references.context.registration', $params->get('registration'))
+                )
+            );
         }
 
+        // Date based filters
         if ($params->has('since')) {
-            $since = Util\Date::dateStringToMongoDate($params->get('since'));
+            $date = Util\Date::dateRFC3339($params->get('since'));
+            if(!$date){
+                throw new Exception('"since" parameter is not a valid ISO 8601 timestamp.(Good example: 2015-11-18T12:17:00+00:00), ', Resource::STATUS_NOT_FOUND);
+            }
+            $since = Util\Date::dateTimeToMongoDate($date);
             $cursor->whereGreaterOrEqual('mongo_timestamp', $since);
         }
 
         if ($params->has('until')) {
-            $until = Util\Date::dateStringToMongoDate($params->get('until'));
+            $date = Util\Date::dateRFC3339($params->get('until'));
+            if(!$date){
+                throw new Exception('"until" parameter is not a valid ISO 8601 timestamp.(Good example: 2015-11-18T12:17:00+00:00), ', Resource::STATUS_NOT_FOUND);
+            }
+            $until = Util\Date::dateTimeToMongoDate($date);
             $cursor->whereLessOrEqual('mongo_timestamp', $until);
         }
 
@@ -277,12 +398,14 @@ class Statement extends Service
             $this->format = $params->get('format');
         }
 
-        if ($params->has('ascending') && $params->get('ascending') === 'true') {
-            $cursor->sort(['_id' => 1]);
-            $this->descending = false;
-        } else {
-            $cursor->sort(['_id' => -1]);
-            $this->descending = true;
+        $this->descending = true;
+        $cursor->sort(['_id' => -1]);
+        if ($params->has('ascending')) {
+            $asc = $params->get('ascending');
+            if(strtolower($asc) === 'true' || $asc === '1') {
+                $cursor->sort(['_id' => 1]);
+                $this->descending = false;
+            }
         }
 
         if ($params->has('limit') && $params->get('limit') < $this->getSlim()->config('xAPI')['statement_get_limit'] && $params->get('limit') > 0) {
@@ -317,7 +440,7 @@ class Statement extends Service
 
         // TODO: Move header validation in json-schema as well
         if ($jsonRequest->getMediaType() !== 'application/json') {
-            throw new \Exception('Media type specified in Content-Type header must be \'application/json\'!', Resource::STATUS_BAD_REQUEST);    
+            throw new \Exception('Media type specified in Content-Type header must be \'application/json\'!', Resource::STATUS_BAD_REQUEST);
         }
 
         // Validation has been completed already - everyhing is assumed to be valid
@@ -375,6 +498,22 @@ class Statement extends Service
         if ($this->areMultipleStatements($body)) {
             $statements = [];
             foreach ($body as $statement) {
+                if (isset($statement['id'])) {
+                    $cursor = $collection->find();
+                    $cursor->where('statement.id', $statement['id']);
+                    $result = $cursor->findOne();
+
+                    // ID exists, check if different or conflict
+                    if ($result) {
+                        // Same - return 200
+                        if ($statement == $result->getStatement()) {
+                            $this->match = true;
+                        } else { // Mismatch - return 409 Conflict
+                            throw new Exception('An existing statement already exists with the same ID and is different from the one provided.', Resource::STATUS_CONFLICT);
+                        }
+                    }
+                }
+
                 $statementDocument = $collection->createDocument();
                 // Overwrite authority - unless it's a super token and manual authority is set
                 if (!($this->getAccessToken()->isSuperToken() && isset($statement['authority'])) || !isset($statement['authority'])) {
@@ -382,18 +521,36 @@ class Statement extends Service
                 }
                 $statementDocument->setStatement($statement);
                 // Dates
-                $currentDate = new \DateTime();
+                $currentDate = Util\Date::dateTimeExact();
                 $statementDocument->setStored(Util\Date::dateTimeToISO8601($currentDate));
                 $statementDocument->setMongoTimestamp(Util\Date::dateTimeToMongoDate($currentDate));
                 $statementDocument->setDefaultTimestamp();
                 $statementDocument->fixAttachmentLinks($attachmentBase);
+                $statementDocument->convertExtensionKeysToUnicode();
                 $statementDocument->setDefaultId();
+                $statementDocument->legacyContextActivities();
+                if ($statementDocument->isReferencing()) {
+                    // Copy values of referenced statement chain inside current statement for faster query-ing
+                    // (space-time tradeoff)
+                    $referencedStatement = $statementDocument->getReferencedStatement();
+
+                    $existingReferences = [];
+                    if (null !== $referencedStatement->getReferences()) {
+                        $existingReferences = $referencedStatement->getReferences();
+                    }
+                    $existingReferences[] = $referencedStatement->getStatement();
+                    $statementDocument->setReferences($existingReferences);
+                }
                 $statements[] = $statementDocument->toArray();
                 $this->statements[] = $statementDocument;
                 if ($statementDocument->isVoiding()) {
                     $referencedStatement = $statementDocument->getReferencedStatement();
-                    $referencedStatement->setVoided(true);
-                    $referencedStatement->save();
+                    if (!$referencedStatement->isVoiding()) {
+                        $referencedStatement->setVoided(true);
+                        $referencedStatement->save();
+                    } else {
+                        throw new \Exception('Voiding statements cannot be voided.', Resource::STATUS_CONFLICT);
+                    }
                 }
                 if ($this->getAccessToken()->hasPermission('define')) {
                     $activities = $statementDocument->extractActivities();
@@ -401,28 +558,72 @@ class Statement extends Service
                         $activityCollection->insertMultiple($activities);
                     }
                 }
+                // Save statement
+                $statementDocument->save();
+
+                // Add to log
+                $this->getSlim()->requestLog->addRelation('statements', $statementDocument)->save();
             }
-            $collection->insertMultiple($statements); // Batch operation is much faster
-        // Single statement
+            // $collection->insertMultiple($statements); // Batch operation is much faster ~600%
+            // However, because we add every single statement to the access log, we can't use it
+            // The only way to still use (fast) batch inserts would be to move the attachment of
+            // statements to their respective log entries in a async queue!
         } else {
+            // Single statement
+            if (isset($body['id'])) {
+                $cursor = $collection->find();
+                $cursor->where('statement.id', $body['id']);
+                $result = $cursor->findOne();
+
+                // ID exists, check if different or conflict
+                if ($result) {
+                    // Same - return 200
+                    if ($body == $result->getStatement()) {
+                        $this->match = true;
+                    } else { // Mismatch - return 409 Conflict
+                        throw new Exception('An existing statement already exists with the same ID and is different from the one provided.', Resource::STATUS_CONFLICT);
+                    }
+                }
+            }
+
             $statementDocument = $collection->createDocument();
             // Overwrite authority - unless it's a super token and manual authority is set
-            if (!($this->getAccessToken()->isSuperToken() && isset($statement['authority'])) || !isset($statement['authority'])) {
-                $statement['authority'] = $this->getAccessToken()->generateAuthority();
+            if (!($this->getAccessToken()->isSuperToken() && isset($body['authority'])) || !isset($body['authority'])) {
+                $body['authority'] = $this->getAccessToken()->generateAuthority();
             }
             $statementDocument->setStatement($body);
             // Dates
-            $currentDate = new \DateTime();
+            $currentDate = Util\Date::dateTimeExact();
             $statementDocument->setStored(Util\Date::dateTimeToISO8601($currentDate));
             $statementDocument->setMongoTimestamp(Util\Date::dateTimeToMongoDate($currentDate));
             $statementDocument->setDefaultTimestamp();
             $statementDocument->fixAttachmentLinks($attachmentBase);
+            $statementDocument->convertExtensionKeysToUnicode();
             $statementDocument->setDefaultId();
+            $statementDocument->legacyContextActivities();
+
+            if ($statementDocument->isReferencing()) {
+                // Copy values of referenced statement chain inside current statement for faster query-ing
+                // (space-time tradeoff)
+                $referencedStatement = $statementDocument->getReferencedStatement();
+
+                $existingReferences = [];
+                if (null !== $referencedStatement->getReferences()) {
+                    $existingReferences = $referencedStatement->getReferences();
+                }
+                $existingReferences[] = $referencedStatement->getStatement();
+
+                $statementDocument->setReferences($existingReferences);
+            }
 
             if ($statementDocument->isVoiding()) {
                 $referencedStatement = $statementDocument->getReferencedStatement();
-                $referencedStatement->setVoided(true);
-                $referencedStatement->save();
+                if (!$referencedStatement->isVoiding()) {
+                    $referencedStatement->setVoided(true);
+                    $referencedStatement->save();
+                } else {
+                    throw new \Exception('Voiding statements cannot be voided.', Resource::STATUS_CONFLICT);
+                }
             }
 
             if ($this->getAccessToken()->hasPermission('define')) {
@@ -433,6 +634,9 @@ class Statement extends Service
             }
 
             $statementDocument->save();
+
+            // Add to log
+            $this->getSlim()->requestLog->addRelation('statements', $statementDocument)->save();
 
             $this->single = true;
             $this->statements = [$statementDocument];
@@ -448,13 +652,22 @@ class Statement extends Service
      */
     public function statementPut($request)
     {
-        // Validation has been completed already - everyhing is assumed to be valid (from an external view!)
-        // TODO: Move header validation in json-schema as well
-        if ($request->getMediaType() !== 'application/json') {
-            throw new \Exception('Media type specified in Content-Type header must be \'application/json\'!', Resource::STATUS_BAD_REQUEST);    
+        // Check for multipart request
+        if ($request->isMultipart()) {
+            $jsonRequest = $request->parts()->get(0);
+        } else {
+            $jsonRequest = $request;
         }
 
-        $body = $request->getBody();
+
+        // Validation has been completed already - everyhing is assumed to be valid (from an external view!)
+        // TODO: Move header validation in json-schema as well
+        if ($jsonRequest->getMediaType() !== 'application/json') {
+            throw new \Exception('Media type specified in Content-Type header must be \'application/json\'!', Resource::STATUS_BAD_REQUEST);
+        }
+
+        // Validation has been completed already - everyhing is assumed to be valid
+        $body = $jsonRequest->getBody();
         $body = json_decode($body, true);
 
         // Some clients escape the JSON - handle them
@@ -462,20 +675,81 @@ class Statement extends Service
             $body = json_decode($body, true);
         }
 
+        // Save attachments - this could be in a queue perhaps...
+        if ($request->isMultipart()) {
+            $fsAdapter = \API\Util\Filesystem::generateAdapter($this->getSlim()->config('filesystem'));
+
+            $attachmentCollection = $this->getDocumentManager()->getCollection('attachments');
+
+            $partCount = $request->parts()->count();
+
+            for ($i = 1; $i < $partCount; $i++) {
+                $part           = $request->parts()->get($i);
+
+                $attachmentBody = $part->getBody();
+
+                $detectedEncoding = mb_detect_encoding($attachmentBody);
+                $contentEncoding = $part->headers('Content-Transfer-Encoding');
+
+                if ($detectedEncoding === 'UTF-8' && ($contentEncoding === null || $contentEncoding === 'binary')) {
+                    try {
+                        $attachmentBody = iconv('UTF-8', 'ISO-8859-1//IGNORE', $attachmentBody);
+                    } catch (\Exception $e) {
+                        //Use raw file on failed conversion (do nothing!)
+                    }
+                }
+
+                $hash           = $part->headers('X-Experience-API-Hash');
+                $contentType    = $part->headers('Content-Type');
+
+                $attachmentDocument = $attachmentCollection->createDocument();
+                $attachmentDocument->setSha2($hash);
+                $attachmentDocument->setContentType($contentType);
+                $attachmentDocument->setTimestamp(new MongoDate());
+                $attachmentDocument->save();
+
+                $fsAdapter->put($hash, $attachmentBody);
+            }
+        }
+
+        $attachmentBase = $this->getSlim()->url->getBaseUrl().$this->getSlim()->config('filesystem')['exposed_url'];
+
+
         // Single
         $params = new Set($request->get());
 
-        $collection  = $this->getDocumentManager()->getCollection('statements');
-        $cursor      = $collection->find();
+        $activityCollection  = $this->getDocumentManager()->getCollection('activities');
+        $collection          = $this->getDocumentManager()->getCollection('statements');
+        $cursor              = $collection->find();
+
+        // Check statementId exists
+        if (!$params->has('statementId')) {
+            throw new Exception('The statementId parameter is missing!', Resource::STATUS_BAD_REQUEST);
+        }
+
+        // Check statementId is acutally valid
+        if(!Uuid::isValid($params->get('statementId'))){
+            throw new Exception('The provided statement ID is invalid!', Resource::STATUS_BAD_REQUEST);
+        }
 
         // Single statement
         $cursor->where('statement.id', $params->get('statementId'));
         $result = $cursor->findOne();
 
+        // Check statementId
+        if (isset($body['id'])) {
+            // Check for match
+            if ($body['id'] !== $params->get('statementId')) {
+                throw new \Exception('Statement ID query parameter doesn\'t match the given statement property', Resource::STATUS_BAD_REQUEST);
+            }
+        } else {
+            $body['id'] = $params->get('statementId');
+        }
+
         // ID exists, check if different or conflict
         if ($result) {
             // Same - return 204 No content
-            if ($body === $result) {
+            if ($body == $result->getStatement()) {
                 $this->match = true;
             } else { // Mismatch - return 409 Conflict
                 throw new Exception('An existing statement already exists with the same ID and is different from the one provided.', Resource::STATUS_CONFLICT);
@@ -483,26 +757,53 @@ class Statement extends Service
         } else { // Store new statement
             $statementDocument = $collection->createDocument();
             // Overwrite authority - unless it's a super token and manual authority is set
-            if (!($this->getAccessToken()->isSuperToken() && isset($statement['authority'])) || !isset($statement['authority'])) {
-                $statement['authority'] = $this->getAccessToken()->generateAuthority();
+            if (!($this->getAccessToken()->isSuperToken() && isset($body['authority'])) || !isset($body['authority'])) {
+                $body['authority'] = $this->getAccessToken()->generateAuthority();
             }
-            // Check statementId
-            if (isset($body['id'])) {
-                //Check for match
-                if ($body['id'] !== $params->get('statementId')) {
-                    throw new \Exception('Statement ID query parameter doesn\'t match the given statement property', Resource::STATUS_BAD_REQUEST);
-                }
-            } else {
-                $body['id'] = $params->get('statementId');
-            }
+
             // Set the statement
             $statementDocument->setStatement($body);
             // Dates
-            $currentDate = new \DateTime();
+            $currentDate = Util\Date::dateTimeExact();
             $statementDocument->setStored(Util\Date::dateTimeToISO8601($currentDate));
             $statementDocument->setMongoTimestamp(Util\Date::dateTimeToMongoDate($currentDate));
             $statementDocument->setDefaultTimestamp();
+            $statementDocument->fixAttachmentLinks($attachmentBase);
+            $statementDocument->legacyContextActivities();
+
+            if ($statementDocument->isReferencing()) {
+                // Copy values of referenced statement chain inside current statement for faster query-ing
+                // (space-time tradeoff)
+                $referencedStatement = $statementDocument->getReferencedStatement();
+
+                $existingReferences = [];
+                if (null !== $referencedStatement->getReferences()) {
+                    $existingReferences = $referencedStatement->getReferences();
+                }
+                $statementDocument->setReferences(array_push($existingReferences, $referencedStatement->getStatement()));
+            }
+
+            if ($statementDocument->isVoiding()) {
+                $referencedStatement = $statementDocument->getReferencedStatement();
+                if (!$referencedStatement->isVoiding()) {
+                    $referencedStatement->setVoided(true);
+                    $referencedStatement->save();
+                } else {
+                    throw new \Exception('Voiding statements cannot be voided.', Resource::STATUS_CONFLICT);
+                }
+            }
+
+            if ($this->getAccessToken()->hasPermission('define')) {
+                $activities = $statementDocument->extractActivities();
+                if (count($activities) > 0) {
+                    $activityCollection->insertMultiple($activities);
+                }
+            }
+
             $statementDocument->save();
+
+            // Add to log
+            $this->getSlim()->requestLog->addRelation('statements', $statementDocument)->save();
 
             $this->single = true;
             $this->statements = [$statementDocument];

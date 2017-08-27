@@ -35,8 +35,10 @@ use Slim\Helper\Set;
 use Sokil\Mongo\Client;
 use API\Service\Auth\OAuth as OAuthService;
 use API\Service\Auth\Basic as BasicAuthService;
+use API\Service\Log as LogService;
 use Slim\Views\Twig;
 use API\Service\Auth\Exception as AuthFailureException;
+use API\Util\Versioning;
 
 // Set up a new Slim instance - default mode is production (it is overriden with SLIM_MODE environment variable)
 $app = new Slim();
@@ -56,16 +58,23 @@ try {
     }
 }
 
+// Use Mongo's native long int
+ini_set('mongo.native_long', 1);
 
 // Only invoked if mode is "production"
 $app->configureMode('production', function () use ($app, $appRoot) {
     // Add config
     Config\Yaml::getInstance()->addFile($appRoot.'/src/xAPI/Config/Config.production.yml');
 
+    // Debug mode
+    if ($app->debug) {
+        $app->log->setLevel(\Slim\Log::DEBUG);
+    }
+
     // Set up logging
     $logger = new Logger\MonologWriter([
         'handlers' => [
-            new StreamHandler($appRoot.'/storage/logs/'.date('Y-m-d').'.log'),
+            new StreamHandler($appRoot.'/storage/logs/production.'.date('Y-m-d').'.log'),
         ],
     ]);
 
@@ -77,10 +86,15 @@ $app->configureMode('development', function () use ($app, $appRoot) {
     // Add config
     Config\Yaml::getInstance()->addFile($appRoot.'/src/xAPI/Config/Config.development.yml');
 
+    // Debug mode
+    if ($app->debug) {
+        $app->log->setLevel(\Slim\Log::DEBUG);
+    }
+
     // Set up logging
     $logger = new Logger\MonologWriter([
         'handlers' => [
-            new StreamHandler($appRoot.'/storage/logs/'.date('Y-m-d').'.log'),
+            new StreamHandler($appRoot.'/storage/logs/development.'.date('Y-m-d').'.log'),
         ],
     ]);
 
@@ -102,10 +116,20 @@ $app->error(function (\Exception $e) {
 
 // Database layer setup
 $app->hook('slim.before', function () use ($app) {
+
+    // #91, Slim 2 cannot deal with full uri's in $_SERVER['REQUEST_URI']
+    // TODO: remove in Slim 3 ?
+    $info = $app->environment()['PATH_INFO'];
+    $url = $app->request->getUrl();
+    if (stripos($info, $url) !== false) {
+        $url .= (substr($url, -1) == '/' ? '' : '/');
+        $app->environment()['PATH_INFO'] = str_replace($url, '', $info);
+    }
+
     $app->container->singleton('mongo', function () use ($app) {
         $client = new Client($app->config('database')['host_uri']);
         $client->map([
-            $app->config('database')['db_name']  => '\API\Collection',
+            $app->config('database')['db_name'] => '\API\Collection',
         ]);
         $client->useDatabase($app->config('database')['db_name']);
 
@@ -120,16 +144,21 @@ $app->hook('slim.before.router', function () use ($app) {
         $app->environment()['REQUEST_METHOD'] = strtoupper($method);
         mb_parse_str($app->request->getBody(), $postData);
         $parameters = new Set($postData);
-        $content = $parameters->get('content');
-        $app->environment()['slim.input'] = $content;
-        $parameters->remove('content');
+        if ($parameters->has('content')) {
+            $content = $parameters->get('content');
+            $app->environment()['slim.input'] = $content;
+            $parameters->remove('content');
+        } else {
+            // Content is the only valid body parameter...everything else are either headers or query parameters
+            $app->environment()['slim.input'] = '';
+        }
         $app->request->headers->replace($parameters->all());
         $app->environment()['slim.request.query_hash'] = $parameters->all();
     }
 });
 
-// Parse version - TODO: create a Version class
-$app->hook('slim.before.dispatch', function () use ($app) {
+// Parse version
+$app->hook('slim.before.dispatch', function () use ($app, $appRoot) {
     // Version
     $app->container->singleton('version', function () use ($app) {
         if ($app->request->isOptions() || $app->request->getPathInfo() === '/about' || strpos(strtolower($app->request->getPathInfo()), '/oauth') === 0) {
@@ -141,17 +170,26 @@ $app->hook('slim.before.dispatch', function () use ($app) {
         if ($versionString === null) {
             throw new \Exception('X-Experience-API-Version header missing.', Resource::STATUS_BAD_REQUEST);
         } else {
-            $versions = explode('.', $versionString);
-            if (isset($versions[0]) && isset($versions[1])) {
-                $major = $versions[0];
-                $minor = $versions[1];
-                $version = $major.$minor;
-
-                return $version;
-            } else {
+            try {
+                $version = Versioning::fromString($versionString);
+            } catch (\InvalidArgumentException $e) {
                 throw new \Exception('X-Experience-API-Version header invalid.', Resource::STATUS_BAD_REQUEST);
             }
+
+            if (!in_array($versionString, $app->config('xAPI')['supported_versions'])) {
+                throw new \Exception('X-Experience-API-Version is not supported.', Resource::STATUS_BAD_REQUEST);
+            }
+
+            return $version;
         }
+    });
+
+    // Request logging
+    $app->container->singleton('requestLog', function () use ($app) {
+        $logService = new LogService($app);
+        $logDocument = $logService->logRequest($app->request);
+
+        return $logDocument;
     });
 
     // Auth - token
@@ -164,12 +202,14 @@ $app->hook('slim.before.dispatch', function () use ($app) {
 
             try {
                 $token = $oAuthService->extractToken($app->request);
+                $app->requestLog->addRelation('oAuthToken', $token)->save();
             } catch (AuthFailureException $e) {
                 // Ignore
             }
 
             try {
                 $token = $basicAuthService->extractToken($app->request);
+                $app->requestLog->addRelation('basicToken', $token)->save();
             } catch (AuthFailureException $e) {
                 // Ignore
             }
@@ -188,6 +228,13 @@ $app->hook('slim.before.dispatch', function () use ($app) {
         $app->container->singleton('view', function () use ($twigContainer) {
             return $twigContainer;
         });
+        $app->view->parserOptions['cache'] = $appRoot.'/storage/.Cache';
+    }
+
+    // Content type check
+    if (($app->request->isPost() || $app->request->isPut()) && $app->request->getPathInfo() === '/statements' && !in_array($app->request->getMediaType(), ['application/json', 'multipart/mixed', 'application/x-www-form-urlencoded'])) {
+        // Bad Content-Type
+        throw new \Exception('Bad Content-Type.', Resource::STATUS_BAD_REQUEST);
     }
 });
 

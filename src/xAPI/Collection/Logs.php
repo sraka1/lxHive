@@ -22,39 +22,14 @@
  * file that was distributed with this source code.
  */
 
-namespace API\Document\Auth;
+namespace API\Collection;
 
-use Sokil\Mongo\Document;
+use Sokil\Mongo\Collection;
 
-class OAuthClient extends Document implements \JsonSerializable
+class Logs extends Collection
 {
-    protected $_data = [
-        'clientId'    => null,
-        'secret'      => null,
-        'description' => null,
-        'name'        => null,
-        'redirectUri' => null,
-    ];
-
-    public function relations()
+    public function getDocumentClassName(array $documentData = null)
     {
-        return [
-            'oAuthTokens' => [self::RELATION_HAS_MANY, 'oAuthTokens', 'clientId'],
-        ];
-    }
-
-    public function jsonSerialize()
-    {
-        return $this->_data;
-    }
-
-    public function renderSummary()
-    {
-        $return = [
-            'name' => $this->_data['name'],
-            'description' =>  $this->_data['description']
-        ];
-
-        return $return;
+        return '\\API\\Document\\Log';
     }
 }

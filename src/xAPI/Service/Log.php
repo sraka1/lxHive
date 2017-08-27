@@ -22,39 +22,33 @@
  * file that was distributed with this source code.
  */
 
-namespace API\Document\Auth;
+namespace API\Service;
 
-use Sokil\Mongo\Document;
+use API\Service;
+use API\Util;
 
-class OAuthClient extends Document implements \JsonSerializable
+class Log extends Service
 {
-    protected $_data = [
-        'clientId'    => null,
-        'secret'      => null,
-        'description' => null,
-        'name'        => null,
-        'redirectUri' => null,
-    ];
-
-    public function relations()
+    /**
+     * Creates a log entry from the given request
+     *
+     * @param Slim\Http\Request $request The request
+     *
+     * @return \API\Document\Log The log document
+     */
+    public function logRequest($request)
     {
-        return [
-            'oAuthTokens' => [self::RELATION_HAS_MANY, 'oAuthTokens', 'clientId'],
-        ];
-    }
+        $collection  = $this->getDocumentManager()->getCollection('logs');
+        $document = $collection->createDocument();
 
-    public function jsonSerialize()
-    {
-        return $this->_data;
-    }
+        $document->setIp($request->getIp());
+        $document->setMethod($request->getMethod());
+        $document->setEndpoint($request->getPathInfo());
+        $currentDate = Util\Date::dateTimeExact();
+        $document->setTimestamp(Util\Date::dateTimeToMongoDate($currentDate));
 
-    public function renderSummary()
-    {
-        $return = [
-            'name' => $this->_data['name'],
-            'description' =>  $this->_data['description']
-        ];
+        $document->save();
 
-        return $return;
+        return $document;
     }
 }

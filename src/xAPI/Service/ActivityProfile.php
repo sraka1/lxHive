@@ -29,6 +29,7 @@ use API\Resource;
 use API\Util;
 use Slim\Helper\Set;
 use Sokil\Mongo\Cursor;
+use DateTime;
 
 class ActivityProfile extends Service
 {
@@ -85,7 +86,11 @@ class ActivityProfile extends Service
         $cursor->where('activityId', $params->get('activityId'));
 
         if ($params->has('since')) {
-            $since = Util\Date::dateStringToMongoDate($params->get('since'));
+            $date = Util\Date::dateRFC3339($params->get('since'));
+            if(!$date){
+                throw new Exception('"since" parameter is not a valid ISO 8601 timestamp.(Good example: 2015-11-18T12:17:00+00:00), ', Resource::STATUS_NOT_FOUND);
+            }
+            $since = Util\Date::dateTimeToMongoDate($date);
             $cursor->whereGreaterOrEqual('mongoTimestamp', $since);
         }
 
@@ -116,10 +121,11 @@ class ActivityProfile extends Service
 
         $result = $cursor->findOne();
 
-        // Check If-Match and If-None-Match here
-        if (!$request->headers('If-Match') && !$request->headers('If-None-Match') && $result) {
-            throw new \Exception('There was a conflict. Check the current state of the resource and set the "If-Match" header with the current ETag to resolve the conflict.', Resource::STATUS_CONFLICT);
-        }
+        // Check If-Match and If-None-Match here - these SHOULD* exist, but they do not have to
+        // See https://github.com/adlnet/xAPI-Spec/blob/1.0.3/xAPI.md#lrs-requirements-7
+        // if (!$request->headers('If-Match') && !$request->headers('If-None-Match') && $result) {
+        //     throw new \Exception('There was a conflict. Check the current state of the resource and set the "If-Match" header with the current ETag to resolve the conflict.', Resource::STATUS_CONFLICT);
+        // }
 
         // If-Match first
         if ($request->headers('If-Match') && $result && ($this->trimHeader($request->headers('If-Match')) !== $result->getHash())) {
@@ -164,13 +170,16 @@ class ActivityProfile extends Service
 
         $activityProfileDocument->setContent($rawBody);
         // Dates
-        $currentDate = new \DateTime();
+        $currentDate = Util\Date::dateTimeExact();
         $activityProfileDocument->setMongoTimestamp(Util\Date::dateTimeToMongoDate($currentDate));
         $activityProfileDocument->setActivityId($params->get('activityId'));
         $activityProfileDocument->setProfileId($params->get('profileId'));
         $activityProfileDocument->setContentType($contentType);
         $activityProfileDocument->setHash(sha1($rawBody));
         $activityProfileDocument->save();
+
+        // Add to log
+        $this->getSlim()->requestLog->addRelation('activityProfiles', $activityProfileDocument)->save();
 
         $this->single = true;
         $this->activityStates = [$activityProfileDocument];
@@ -233,13 +242,16 @@ class ActivityProfile extends Service
 
         $activityProfileDocument->setContent($rawBody);
         // Dates
-        $currentDate = new \DateTime();
+        $currentDate = Util\Date::dateTimeExact();
         $activityProfileDocument->setMongoTimestamp(Util\Date::dateTimeToMongoDate($currentDate));
         $activityProfileDocument->setActivityId($params->get('activityId'));
         $activityProfileDocument->setProfileId($params->get('profileId'));
         $activityProfileDocument->setContentType($contentType);
         $activityProfileDocument->setHash(sha1($rawBody));
         $activityProfileDocument->save();
+
+        // Add to log
+        $this->getSlim()->requestLog->addRelation('activityProfiles', $activityProfileDocument)->save();
 
         $this->single = true;
         $this->activityProfiles = [$activityProfileDocument];
@@ -270,10 +282,11 @@ class ActivityProfile extends Service
             throw new \Exception('Profile does not exist!.', Resource::STATUS_NOT_FOUND);
         }
 
-        // Check If-Match and If-None-Match here
-        if (!$request->headers('If-Match') && !$request->headers('If-None-Match') && $result) {
-            throw new \Exception('There was a conflict. Check the current state of the resource and set the "If-Match" header with the current ETag to resolve the conflict.', Resource::STATUS_CONFLICT);
-        }
+        // Check If-Match and If-None-Match here - these SHOULD* exist, but they do not have to
+        // See https://github.com/adlnet/xAPI-Spec/blob/1.0.3/xAPI.md#lrs-requirements-7
+        // if (!$request->headers('If-Match') && !$request->headers('If-None-Match') && $result) {
+        //     throw new \Exception('There was a conflict. Check the current state of the resource and set the "If-Match" header with the current ETag to resolve the conflict.', Resource::STATUS_CONFLICT);
+        // }
 
         // If-Match first
         if ($request->headers('If-Match') && $result && ($this->trimHeader($request->headers('If-Match')) !== $result->getHash())) {
@@ -288,6 +301,9 @@ class ActivityProfile extends Service
                 throw new \Exception('If-None-Match header matches the current ETag.', Resource::STATUS_PRECONDITION_FAILED);
             }
         }
+
+        // Add to log
+        $this->getSlim()->requestLog->addRelation('activityProfiles', $result)->save();
 
         $result->delete();
 

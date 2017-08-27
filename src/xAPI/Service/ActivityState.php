@@ -82,6 +82,8 @@ class ActivityState extends Service
                 $uniqueIdentifier = 'openid';
             } elseif (isset($agent['account'])) {
                 $uniqueIdentifier = 'account';
+            } else {
+                throw new Exception('Invalid request!', Resource::STATUS_BAD_REQUEST);
             }
             $cursor->where('agent.'.$uniqueIdentifier, $agent[$uniqueIdentifier]);
 
@@ -111,6 +113,8 @@ class ActivityState extends Service
             $uniqueIdentifier = 'openid';
         } elseif (isset($agent['account'])) {
             $uniqueIdentifier = 'account';
+        } else {
+            throw new Exception('Invalid request!', Resource::STATUS_BAD_REQUEST);
         }
         $cursor->where('agent.'.$uniqueIdentifier, $agent[$uniqueIdentifier]);
 
@@ -119,7 +123,11 @@ class ActivityState extends Service
         }
 
         if ($params->has('since')) {
-            $since = Util\Date::dateStringToMongoDate($params->get('since'));
+            $date = Util\Date::dateRFC3339($params->get('since'));
+            if(!$date){
+                throw new Exception('"since" parameter is not a valid ISO 8601 timestamp.(Good example: 2015-11-18T12:17:00+00:00), ', Resource::STATUS_NOT_FOUND);
+            }
+            $since = Util\Date::dateTimeToMongoDate($date);
             $cursor->whereGreaterOrEqual('mongoTimestamp', $since);
         }
 
@@ -159,6 +167,8 @@ class ActivityState extends Service
             $uniqueIdentifier = 'openid';
         } elseif (isset($agent['account'])) {
             $uniqueIdentifier = 'account';
+        } else {
+            throw new Exception('Invalid request!', Resource::STATUS_BAD_REQUEST);
         }
         $cursor->where('agent.'.$uniqueIdentifier, $agent[$uniqueIdentifier]);
 
@@ -198,7 +208,7 @@ class ActivityState extends Service
 
         $activityStateDocument->setContent($rawBody);
         // Dates
-        $currentDate = new \DateTime();
+        $currentDate = Util\Date::dateTimeExact();
         $activityStateDocument->setMongoTimestamp(Util\Date::dateTimeToMongoDate($currentDate));
 
         $activityStateDocument->setActivityId($params->get('activityId'));
@@ -210,6 +220,9 @@ class ActivityState extends Service
         $activityStateDocument->setContentType($contentType);
         $activityStateDocument->setHash(sha1($rawBody));
         $activityStateDocument->save();
+
+        // Add to log
+        $this->getSlim()->requestLog->addRelation('activityStates', $activityStateDocument)->save();
 
         $this->single = true;
         $this->activityStates = [$activityStateDocument];
@@ -250,6 +263,8 @@ class ActivityState extends Service
             $uniqueIdentifier = 'openid';
         } elseif (isset($agent['account'])) {
             $uniqueIdentifier = 'account';
+        } else {
+            throw new Exception('Invalid request!', Resource::STATUS_BAD_REQUEST);
         }
         $cursor->where('agent.'.$uniqueIdentifier, $agent[$uniqueIdentifier]);
 
@@ -271,7 +286,7 @@ class ActivityState extends Service
 
         $activityStateDocument->setContent($rawBody);
         // Dates
-        $currentDate = new \DateTime();
+        $currentDate = Util\Date::dateTimeExact();
         $activityStateDocument->setMongoTimestamp(Util\Date::dateTimeToMongoDate($currentDate));
         $activityStateDocument->setActivityId($params->get('activityId'));
 
@@ -283,6 +298,9 @@ class ActivityState extends Service
         $activityStateDocument->setContentType($contentType);
         $activityStateDocument->setHash(sha1($rawBody));
         $activityStateDocument->save();
+
+        // Add to log
+        $this->getSlim()->requestLog->addRelation('activityStates', $activityStateDocument)->save();
 
         $this->single = true;
         $this->activityStates = [$activityStateDocument];
@@ -322,6 +340,8 @@ class ActivityState extends Service
             $uniqueIdentifier = 'openid';
         } elseif (isset($agent['account'])) {
             $uniqueIdentifier = 'account';
+        } else {
+            throw new Exception('Invalid request!', Resource::STATUS_BAD_REQUEST);
         }
         $expression->where('agent.'.$uniqueIdentifier, $agent[$uniqueIdentifier]);
 

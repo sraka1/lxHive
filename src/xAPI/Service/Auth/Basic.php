@@ -30,6 +30,7 @@ use Slim\Helper\Set;
 use Slim\Http\Request;
 use API\Document\User;
 use API\Service\User as UserService;
+use API\Util;
 
 class Basic extends Service implements AuthInterface
 {
@@ -114,8 +115,7 @@ class Basic extends Service implements AuthInterface
         $expiresAt = $accessTokenDocument->getExpiresAt();
 
         if ($expiresAt !== null) {
-            $dateTime = new \DateTime($expiresAt);
-            if ($dateTime->getTimestamp() >= time()) {
+            if ($expiresAt->sec <= time()) {
                 throw new \Exception('Expired token.', Resource::STATUS_FORBIDDEN);
             }
         }
@@ -132,13 +132,17 @@ class Basic extends Service implements AuthInterface
      *
      * @return [type] [description]
      */
-    public function deleteToken($clientId)
+    public function deleteToken($key, $secret = null)
     {
         $collection  = $this->getDocumentManager()->getCollection('basicTokens');
 
         $expression = $collection->expression();
 
-        $expression->where('clientId', $clientId);
+        $expression->where('key', $key);
+
+        if (null != $secret) {
+            $expression->where('secret', $secret);
+        }
 
         $collection->deleteDocuments($expression);
 
@@ -153,20 +157,19 @@ class Basic extends Service implements AuthInterface
      *
      * @return [type] [description]
      */
-    public function expireToken($clientId, $accessToken)
+    public function expireToken($key)
     {
         $collection  = $this->getDocumentManager()->getCollection('basicTokens');
         $cursor      = $collection->find();
+        $cursor->where('key', $key);
 
-        $cursor->where('token', $accessToken);
-        $cursor->where('clientId', $clientId);
         $accessTokenDocument = $cursor->current();
         $accessTokenDocument->setExpired(true);
         $accessTokenDocument->save();
 
         $this->setAccessTokens([$accessTokenDocument]);
 
-        return $document;
+        return $accessTokenDocument;
     }
 
     /**
@@ -223,11 +226,34 @@ class Basic extends Service implements AuthInterface
             $body = json_decode($body, true);
         }
 
-        $params = new Set($body);
-
-        if ($params->get('user')['email'] === null || $params->get('user')['password'] === null || $params->get('user')['permissions'] === null || $params->get('name') === null || $params->get('description') === null || $params->get('expiresAt') === null || $params->get('scopes') === null) {
-            throw new \Exception('Invalid request', Resource::STATUS_BAD_REQUEST);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            throw new \Exception('Invalid JSON posted. Cannot continue!', Resource::STATUS_BAD_REQUEST);
         }
+
+        $requestParams = new Set($body);
+
+        if ($requestParams->get('user')['email'] === null) {
+            throw new \Exception('Invalid request, user.email property not present!', Resource::STATUS_BAD_REQUEST);
+        }
+
+        $currentDate = new \DateTime();
+
+        $defaultParams = new Set([
+            'user' => [
+                'password' => 'password',
+                'permissions' => [
+                    'all'
+                ]
+            ],
+            'scopes' => [
+                'all'
+            ],
+            'name' => 'Token for ' . $requestParams->get('user')['email'],
+            'description' => 'Token generated at ' . Util\Date::dateTimeToISO8601($currentDate),
+            'expiresAt' => null
+        ]);
+
+        $params = new Set(array_replace_recursive($defaultParams->all(), $requestParams->all()));
 
         $scopeDocuments = [];
         $scopes = $params->get('scopes');
@@ -236,11 +262,45 @@ class Basic extends Service implements AuthInterface
             $scopeDocuments[] = $scopeDocument;
         }
 
-        $userService = new UserService($this->getSlim());
-        $user = $userService->addUser($params->get('user')['email'], $params->get('user')['password'], $params->get('user')['permissions']);
-        $user->save();
+        $permissionDocuments = [];
+        $permissions = $params->get('user')['permissions'];
+        foreach ($permissions as $permission) {
+            $permissionDocument = $this->getScopeByName($permission);
+            $permissionDocuments[] = $permissionDocument;
+        }
 
-        $this->addToken($params->get('name'), $params->get('description'), $params->get('expiresAt'), $user, $scopeDocuments);
+        if (is_numeric($params->get('expiresAt'))) {
+            $expiresAt = $params->get('expiresAt');
+        } else if (null === $params->get('expiresAt')) {
+            $expiresAt = null;
+        } else {
+            $expiresAt = new \DateTime($params->get('expiresAt'));
+            $expiresAt = $expiresAt->getTimestamp();
+        }
+
+        $userService = new UserService($this->getSlim());
+        $email = $params->get('user')['email'];
+        $password = $params->get('user')['password'];
+        // Account exists
+        if ($userService->getEmailCount($email) > 0) {
+            $correctUserFound = false;
+            $usersCursor = $userService->findByEmail($email);
+            foreach ($usersCursor as $matchedUser) {
+                if ($matchedUser->getPassword() === sha1($password)) {
+                    $correctUserFound = true;
+                    $user = $matchedUser;
+                    break;
+                }
+            }
+            if (!$correctUserFound) {
+                throw new \Exception('Invalid credentials.', Resource::STATUS_UNAUTHORIZED);
+            }
+        } else {
+            $user = $userService->addUser($email, $password, $permissionDocuments);
+            $user->save();
+        }
+
+        $this->addToken($params->get('name'), $params->get('description'), $expiresAt, $user, $scopeDocuments);
 
         return $this;
     }
@@ -270,17 +330,19 @@ class Basic extends Service implements AuthInterface
         }
 
         if (preg_match('/Basic\s+(.*)$/i', $header, $matches)) {
-            list($authUser, $authPass) = explode(':', base64_decode($matches[1]));
+            $str =  base64_decode($matches[1]);
         } else {
             throw new Exception('Authorization header invalid.');
         }
 
-        if (isset($authUser) && isset($authPass)) {
-            try {
-                $token = $this->fetchToken($authUser, $authPass);
-            } catch (\Exception $e) {
-                throw new Exception('Authorization header invalid.');
-            }
+        $components = explode(':', $str);
+        $authUser = $components[0];
+        $authPass = (isset($components[1])) ? $components[1] : '';
+
+        try {
+            $token = $this->fetchToken($authUser, $authPass);
+        } catch (\Exception $e) {
+            throw new Exception('Authorization header invalid.');
         }
 
         return $token;

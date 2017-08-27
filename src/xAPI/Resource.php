@@ -142,10 +142,14 @@ abstract class Resource
 
         $slim->status($status);
         $slim->response->headers->set('Access-Control-Allow-Origin', '*');
-        $slim->response->headers->set('Access-Control-Allow-Methods', 'POST,PUT,GET,OPTIONS');
+        $slim->response->headers->set('Access-Control-Allow-Methods', 'POST,PUT,GET,OPTIONS,DELETE');
         $slim->response->headers->set('Access-Control-Allow-Headers', 'Origin,Content-Type,Authorization,Accept,X-Experience-API-Version,If-Match,If-None-Match');
         $slim->response->headers->set('Access-Control-Allow-Credentials-Control-Allow-Origin', 'true');
+        $slim->response->headers->set('Access-Control-Expose-Headers', 'ETag,Last-Modified,Content-Length,X-Experience-API-Version,X-Experience-API-Consistent-Through');
         $slim->response->headers->set('X-Experience-API-Version', $slim->config('xAPI')['latest_version']);
+
+        $date = \API\Util\Date::dateTimeToISO8601(\API\Util\Date::dateTimeExact());
+        $slim->response->headers->set('X-Experience-API-Consistent-Through', $date);
 
         if (!empty($allow)) {
             $slim->response()->header('Allow', strtoupper(implode(',', $allow)));
@@ -194,11 +198,11 @@ abstract class Resource
      */
     public static function load($version, $resource, $subResource)
     {
-        $version = 'V'.$version;
+        $versionNamespace = $version->generateClassNamespace();
         if (null !== $subResource) {
-            $class = __NAMESPACE__.'\\Resource\\'.$version.'\\'.ucfirst($resource).'\\'.ucfirst($subResource);
+            $class = __NAMESPACE__.'\\Resource\\'.$versionNamespace.'\\'.ucfirst($resource).'\\'.ucfirst($subResource);
         } else {
-            $class = __NAMESPACE__.'\\Resource\\'.$version.'\\'.ucfirst($resource);
+            $class = __NAMESPACE__.'\\Resource\\'.$versionNamespace.'\\'.ucfirst($resource);
         }
         if (!class_exists($class)) {
             return;

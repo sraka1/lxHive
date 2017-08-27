@@ -127,6 +127,14 @@ class OAuth extends Service implements AuthInterface
             throw new \Exception('Invalid access token specified.', Resource::STATUS_FORBIDDEN);
         }
 
+        $expiresAt = $accessTokenDocument->getExpiresAt();
+
+        if ($expiresAt !== null) {
+            if ($expiresAt->sec <= time()) {
+                throw new \Exception('Expired token.', Resource::STATUS_FORBIDDEN);
+            }
+        }
+
         $this->setAccessTokens([$accessTokenDocument]);
 
         return $accessTokenDocument;
@@ -199,13 +207,16 @@ class OAuth extends Service implements AuthInterface
     {
         $collection  = $this->getDocumentManager()->getCollection('authScopes');
 
+        // #104, check if scope document record exists already
+        $exists = $collection->find()->where('name', $name)->findOne();
+        if ($exists) {
+            return false;
+        }
+
         // Set up the Client to be saved
         $scopeDocument = $collection->createDocument();
-
         $scopeDocument->setName($name);
-
         $scopeDocument->setDescription($description);
-
         $scopeDocument->save();
 
         $this->single = true;

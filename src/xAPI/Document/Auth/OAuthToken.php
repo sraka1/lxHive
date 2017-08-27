@@ -43,19 +43,15 @@ class OAuthToken extends AbstractToken
             'user'   => [self::RELATION_BELONGS, 'users', 'userId'],
             'client' => [self::RELATION_BELONGS, 'oAuthClients', 'clientId'],
             'scopes' => [self::RELATION_MANY_MANY, 'authScopes', 'scopeIds', true],
+            'logs' => [self::RELATION_HAS_MANY, 'logs', 'oAuthTokenId']
         ];
-    }
-
-    public function getExpired()
-    {
-        return (bool) !($this->getExpiresAt() > time());
     }
 
     public function generateAuthority()
     {
         $slim = Slim::getInstance();
         $url = $slim->url;
-        $host = $url->getHost()->__toString();
+        $host = $url->getBaseUrl();
         $authority = [
             'objectType' => 'Group',
             'member' => [

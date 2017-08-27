@@ -45,6 +45,10 @@ abstract class AbstractToken extends Document implements \JsonSerializable, Toke
             if ($scope->getName() === $permissionName || $scope->getName() === 'super') {
                 return true;
             }
+
+            if ($permissionName !== 'super' && $scope->getName() === 'all') {
+                return true;
+            }
         }
 
         return false;
@@ -52,10 +56,21 @@ abstract class AbstractToken extends Document implements \JsonSerializable, Toke
 
     public function checkPermission($permissionName)
     {
-        if ($this->hasPermission($permissionName)) {
+        $result = false;
+        if (is_array($permissionName)) {
+            foreach ($permissionName as $individualPermissionName) {
+                if ($this->hasPermission($individualPermissionName)) {
+                    $result = true;
+                }
+            }
+        } else {
+            $result = $this->hasPermission($permissionName);
+        }
+
+        if ($result) {
             return true;
         } else {
-            return new \Exception('Permission denied.', Resource::STATUS_FORBIDDEN);
+            throw new \Exception('Permission denied.', Resource::STATUS_FORBIDDEN);
         }
     }
 
@@ -89,15 +104,6 @@ abstract class AbstractToken extends Document implements \JsonSerializable, Toke
             return true;
         } else {
             return false;
-        }
-    }
-
-    public function isValid()
-    {
-        if ($this->isExpired()) {
-            return false;
-        } else {
-            return true;
         }
     }
 

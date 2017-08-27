@@ -26,35 +26,7 @@ namespace API\Document\Auth;
 
 use Sokil\Mongo\Document;
 
-class OAuthClient extends Document implements \JsonSerializable
+class PersistentSession extends Document implements \JsonSerializable
 {
-    protected $_data = [
-        'clientId'    => null,
-        'secret'      => null,
-        'description' => null,
-        'name'        => null,
-        'redirectUri' => null,
-    ];
 
-    public function relations()
-    {
-        return [
-            'oAuthTokens' => [self::RELATION_HAS_MANY, 'oAuthTokens', 'clientId'],
-        ];
-    }
-
-    public function jsonSerialize()
-    {
-        return $this->_data;
-    }
-
-    public function renderSummary()
-    {
-        $return = [
-            'name' => $this->_data['name'],
-            'description' =>  $this->_data['description']
-        ];
-
-        return $return;
-    }
 }
